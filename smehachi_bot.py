@@ -10,7 +10,7 @@ from telegram.ext import (
 )
 
 # --- Конфигурация ---
-TOKEN = '7654200449:AAHcmtVsVSG-FcFnNidyyHTlF9-RClbZms4'
+TOKEN = os.environ.get("TOKEN", "")
 DATA_FILE = "smehachi.json"
 HISTORY_FILE = "smehachi_history.json"
 
@@ -59,7 +59,8 @@ def record_history(name, count):
 
 # --- Команды ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Я считаю смехачи. Пиши 'даю 3 смехача Лизе', 'минус 2 Руслану' или 'плюс 5 Насте'.")
+    if update.message:
+        await update.message.reply_text("Привет! Я считаю смехачи. Пиши 'даю 3 смехача Лизе', 'минус 2 Руслану' или 'плюс 5 Насте'.")
 
 async def rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sorted_users = sorted(smehachi.items(), key=lambda x: x[1], reverse=True)
@@ -67,7 +68,8 @@ async def rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for name, count in sorted_users:
         if name in valid_names:
             text += f"{name}: {count} смехачей\n"
-    await update.message.reply_text(text)
+    if update.message:
+        await update.message.reply_text(text)
 
 async def weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = datetime.utcnow()
@@ -84,10 +86,14 @@ async def weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "📆 Рейтинг за эту неделю:\n\n"
     for name, count in sorted_users:
         text += f"{name}: {count} смехачей\n"
-    await update.message.reply_text(text)
+    if update.message:
+        await update.message.reply_text(text)
 
 # --- Обработка начислений и вычитаний ---
 async def handle_smehachi(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text:
+        return
+
     text = update.message.text
     sender = update.effective_user.first_name
 
@@ -101,7 +107,8 @@ async def handle_smehachi(update: Update, context: ContextTypes.DEFAULT_TYPE):
             smehachi[recipient] = smehachi.get(recipient, 0) + count
             save_json(DATA_FILE, smehachi)
             record_history(recipient, count)
-            await update.message.reply_text(f"{recipient} получил {count} смехачей! 🎉")
+            if update.message:
+                await update.message.reply_text(f"{recipient} получил {count} смехачей! 🎉")
         return
 
     # Вычитание
@@ -114,7 +121,8 @@ async def handle_smehachi(update: Update, context: ContextTypes.DEFAULT_TYPE):
             smehachi[recipient] = smehachi.get(recipient, 0) - count
             save_json(DATA_FILE, smehachi)
             record_history(recipient, -count)
-            await update.message.reply_text(f"{recipient} лишился {count} смехачей! 😬")
+            if update.message:
+                await update.message.reply_text(f"{recipient} лишился {count} смехачей! 😬")
         return
 
 # --- Запуск ---
