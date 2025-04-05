@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+smehachi.json
+smehachi_history.json
+.env
