@@ -1,0 +1,16 @@
+app = "humor-king-bot"
+primary_region = "fra"
+
+[build]
+
+[env]
+  PYTHONUNBUFFERED = "1"
+
+[mounts]
+  source = "humor_king_data"
+  destination = "/data"
+
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1
