@@ -38,26 +38,32 @@ def save_json(path, data):
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-smehachi = load_json(DATA_FILE)       # {"Лиза": 10, "Руслан": 5, ...}
-smehachi_history = load_json(HISTORY_FILE)
+_all_smehachi = load_json(DATA_FILE)      # {chat_id: {name: count}}
+_all_history = load_json(HISTORY_FILE)    # {chat_id: {name: [records]}}
 
 # --- Утилиты ---
 def get_display_name(user) -> str:
-    """Имя пользователя для отображения."""
     return user.first_name or user.username or str(user.id)
 
-def add_smehachi(name: str, count: int):
-    smehachi[name] = smehachi.get(name, 0) + count
-    smehachi_history.setdefault(name, []).append({
-        "count": count,
-        "time": datetime.utcnow().isoformat()
-    })
-    save_json(DATA_FILE, smehachi)
-    save_json(HISTORY_FILE, smehachi_history)
+def _chat_key(chat_id: int) -> str:
+    return str(chat_id)
 
-def get_known_names() -> list[str]:
-    """Все участники, у кого есть хоть один смехач в истории."""
-    return list(smehachi.keys())
+def get_smehachi(chat_id: int) -> dict:
+    return _all_smehachi.setdefault(_chat_key(chat_id), {})
+
+def get_history(chat_id: int) -> dict:
+    return _all_history.setdefault(_chat_key(chat_id), {})
+
+def add_smehachi(chat_id: int, name: str, count: int):
+    s = get_smehachi(chat_id)
+    s[name] = s.get(name, 0) + count
+    h = get_history(chat_id)
+    h.setdefault(name, []).append({"count": count, "time": datetime.utcnow().isoformat()})
+    save_json(DATA_FILE, _all_smehachi)
+    save_json(HISTORY_FILE, _all_history)
+
+def get_known_names(chat_id: int) -> list[str]:
+    return list(get_smehachi(chat_id).keys())
 
 # --- AI оценка шутки ---
 async def ai_evaluate(text: str, sender: str) -> dict | None:
@@ -140,25 +146,28 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
-    if not smehachi:
+    chat_id = update.message.chat_id
+    s = get_smehachi(chat_id)
+    if not s:
         await update.message.reply_text("Пока никто не набрал смехачей 😶")
         return
-    sorted_users = sorted(smehachi.items(), key=lambda x: x[1], reverse=True)
+    sorted_users = sorted(s.items(), key=lambda x: x[1], reverse=True)
     medals = ['🥇', '🥈', '🥉'] + ['😐'] * 20
     text = "📊 Рейтинг смехачей:\n\n"
     for i, (name, count) in enumerate(sorted_users):
         bar = '█' * min(count // 5, 10) if count > 0 else '░'
         text += f"{medals[i]} {name}: {count} {bar}\n"
-    text += f"\nВсего: {sum(smehachi.values())} 😂"
+    text += f"\nВсего: {sum(s.values())} 😂"
     await update.message.reply_text(text)
 
 async def weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
+    chat_id = update.message.chat_id
     now = datetime.utcnow()
     week_start = now - timedelta(days=now.weekday())
     weekly_scores = {}
-    for name, records in smehachi_history.items():
+    for name, records in get_history(chat_id).items():
         total = sum(r['count'] for r in records if datetime.fromisoformat(r['time']) >= week_start)
         if total != 0:
             weekly_scores[name] = total
@@ -168,20 +177,23 @@ async def weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sorted_users = sorted(weekly_scores.items(), key=lambda x: x[1], reverse=True)
     text = "📆 Эта неделя:\n\n"
     for name, count in sorted_users:
-        sign = "+" if count > 0 else ""
-        text += f"{name}: {sign}{count}\n"
+        text += f"{name}: {'+' if count > 0 else ''}{count}\n"
     await update.message.reply_text(text)
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not smehachi:
+    if not update.message:
+        return
+    chat_id = update.message.chat_id
+    s = get_smehachi(chat_id)
+    if not s:
         await update.message.reply_text("Пока пусто 🤷")
         return
     text = "📈 Подробная статистика:\n\n"
-    for name, total in sorted(smehachi.items(), key=lambda x: x[1], reverse=True):
-        records = smehachi_history.get(name, [])
+    for name, total in sorted(s.items(), key=lambda x: x[1], reverse=True):
+        records = get_history(chat_id).get(name, [])
         given = sum(r['count'] for r in records if r['count'] > 0)
         taken = sum(abs(r['count']) for r in records if r['count'] < 0)
-        text += f"**{name}**: {total} (получено +{given}, снято -{taken})\n"
+        text += f"{name}: {total} (получено +{given}, снято -{taken})\n"
     await update.message.reply_text(text)
 
 # --- Основной обработчик ---
@@ -193,8 +205,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text.startswith('/'):
         return
 
+    chat_id = update.message.chat_id
     sender = get_display_name(update.effective_user)
-    known_names = get_known_names()
+    known_names = get_known_names(chat_id)
 
     # 1. Проверяем: может это ручная команда начисления?
     cmd = await ai_parse_command(text, known_names)
@@ -202,10 +215,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target = cmd["target"]
         count = int(cmd["count"])
         if cmd["action"] == "add":
-            add_smehachi(target, count)
+            add_smehachi(chat_id, target, count)
             await update.message.reply_text(f"🎉 {target} получает {count} смехачей!")
         elif cmd["action"] == "remove":
-            add_smehachi(target, -count)
+            add_smehachi(chat_id, target, -count)
             await update.message.reply_text(f"😬 {target} лишается {count} смехачей!")
         return
 
@@ -214,7 +227,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if result:
         count = result.get("smehachi", 1)
         comment = result.get("comment", "")
-        add_smehachi(sender, count)
+        add_smehachi(chat_id, sender, count)
         emoji = {1: '😄', 2: '😄', 3: '😂', 4: '🤣', 5: '💀'}.get(count, '😄')
         ending = 'а' if count in [2, 3, 4] else 'ей'
         await update.message.reply_text(
