@@ -97,25 +97,28 @@ async def ai_evaluate(text: str, sender: str) -> dict | None:
         logger.error(f"AI eval error: {e}")
     return None
 
-# --- AI парсинг ручных команд ---
+# --- AI парсинг команд ---
 async def ai_parse_command(text: str, known_names: list[str]) -> dict | None:
-    """Haiku парсит ручное начисление/вычитание из текста."""
+    """Haiku определяет: начисление/вычитание, запрос статистики или ничего."""
     if not anthropic_client:
         return None
 
     names_str = ", ".join(known_names) if known_names else "неизвестно"
-    prompt = f"""В сообщении могут быть команды для начисления/вычитания смехачей.
-Известные участники чата: {names_str}
+    prompt = f"""Ты анализируешь сообщение в групповом чате со смехачами.
+Участники: {names_str}
 
 Сообщение: «{text}»
 
-Если это команда начисления или вычитания смехачей — ответь JSON:
-{{"action": "add" или "remove", "count": <число>, "target": "<имя из списка участников>"}}
+Определи тип и ответь ТОЛЬКО JSON:
 
-Если это НЕ команда — ответь:
-{{"action": null}}
+Начисление смехачей → {{"action": "add", "count": <число>, "target": "<имя>"}}
+Вычитание смехачей → {{"action": "remove", "count": <число>, "target": "<имя>"}}
+Запрос общего рейтинга → {{"action": "rating"}}
+Запрос статистики за неделю → {{"action": "weekly"}}
+Запрос подробной статистики → {{"action": "stats"}}
+Ничего из вышеперечисленного → {{"action": null}}
 
-Только JSON, без объяснений."""
+Только JSON."""
 
     try:
         response = await anthropic_client.messages.create(
@@ -124,7 +127,7 @@ async def ai_parse_command(text: str, known_names: list[str]) -> dict | None:
             messages=[{"role": "user", "content": prompt}]
         )
         result = json.loads(response.content[0].text.strip())
-        if result.get("action") and result.get("target") and result.get("count"):
+        if result.get("action"):
             return result
     except Exception as e:
         logger.error(f"AI parse error: {e}")
@@ -209,18 +212,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sender = get_display_name(update.effective_user)
     known_names = get_known_names(chat_id)
 
-    # 1. Проверяем: может это ручная команда начисления?
+    # 1. Проверяем: команда начисления, вычитания или запрос статистики
     cmd = await ai_parse_command(text, known_names)
     if cmd and cmd.get("action"):
-        target = cmd["target"]
-        count = int(cmd["count"])
-        if cmd["action"] == "add":
-            add_smehachi(chat_id, target, count)
-            await update.message.reply_text(f"🎉 {target} получает {count} смехачей!")
-        elif cmd["action"] == "remove":
-            add_smehachi(chat_id, target, -count)
-            await update.message.reply_text(f"😬 {target} лишается {count} смехачей!")
-        return
+        action = cmd["action"]
+        if action == "add":
+            add_smehachi(chat_id, cmd["target"], int(cmd["count"]))
+            await update.message.reply_text(f"🎉 {cmd['target']} получает {cmd['count']} смехачей!")
+            return
+        elif action == "remove":
+            add_smehachi(chat_id, cmd["target"], -int(cmd["count"]))
+            await update.message.reply_text(f"😬 {cmd['target']} лишается {cmd['count']} смехачей!")
+            return
+        elif action == "rating":
+            await rating(update, context)
+            return
+        elif action == "weekly":
+            await weekly(update, context)
+            return
+        elif action == "stats":
+            await stats(update, context)
+            return
 
     # 2. AI оценка шутки от отправителя
     result = await ai_evaluate(text, sender)
